@@ -1,8 +1,3 @@
-# ---------------------------------------------------------
-# FINAL Streamlit App for Customer Churn Prediction
-# With Correct SHAP Using XGBoost Booster (pred_contribs)
-# ---------------------------------------------------------
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -12,12 +7,14 @@ import matplotlib.pyplot as plt
 
 st.set_page_config(page_title="Customer Churn Prediction", layout="wide")
 
-# Global Yes/No mapping
+# Yes/No mapping
 binary = {"Yes": 1, "No": 0}
 
+# Keep normal threshold
+THRESHOLD = 0.30
 
 # ---------------------------------------------------------
-# Utility Functions
+# Utility
 # ---------------------------------------------------------
 
 def safe_load(path):
@@ -29,7 +26,6 @@ def safe_load(path):
 
 
 def build_input_df(values):
-    """Creates a single-row DataFrame."""
     return pd.DataFrame({k: [v] for k, v in values.items()})
 
 
@@ -40,21 +36,19 @@ def encode_and_align(df_row, full_cols):
 
 
 def plot_shap_bar(shap_values_row, feature_names, top_n=12):
-    """Horizontal bar plot for SHAP values."""
     shap_abs = np.abs(shap_values_row)
-    ser = pd.Series(shap_abs, index=feature_names)
-    ser = ser.sort_values(ascending=False).head(top_n)
+    ser = pd.Series(shap_abs, index=feature_names).sort_values(ascending=False).head(top_n)
 
     fig, ax = plt.subplots(figsize=(8, 5))
     ser[::-1].plot.barh(ax=ax)
     ax.set_title("Top SHAP Feature Impacts")
-    ax.set_xlabel("Absolute SHAP value")
+    ax.set_xlabel("Absolute SHAP Value")
     plt.tight_layout()
     return fig
 
 
 # ---------------------------------------------------------
-# Load model + columns
+# Load assets
 # ---------------------------------------------------------
 
 @st.cache_resource
@@ -73,7 +67,7 @@ model, full_cols = load_assets()
 
 
 # ---------------------------------------------------------
-# UI — Input Form
+# UI
 # ---------------------------------------------------------
 
 st.title("📉 Telecom Customer Churn Prediction")
@@ -90,20 +84,28 @@ with st.form("customer_form"):
         paperless = st.selectbox("Paperless Billing", ["Yes", "No"])
 
     with col2:
-        tenure = st.number_input("Tenure (months)", min_value=0, max_value=72, value=10)
+        tenure = st.number_input("Tenure (months)", min_value=0, max_value=72, value=1)
         monthly = st.number_input("Monthly Charges", min_value=0.0, max_value=1000.0, value=70.0)
         internet = st.selectbox("Internet Service", ["DSL", "Fiber optic", "No"])
-        mult_lines = st.selectbox("Multiple Lines", ["No", "Yes", "No phone service"])
-        online_security = st.selectbox("Online Security", ["No", "Yes", "No internet service"])
-        online_backup = st.selectbox("Online Backup", ["No", "Yes", "No internet service"])
+        mult_lines = st.selectbox("Multiple Lines", ["No phone service", "No", "Yes"])
+        online_security = st.selectbox("Online Security", ["No internet service", "No", "Yes"])
+        online_backup = st.selectbox("Online Backup", ["No internet service", "No", "Yes"])
 
     with col3:
-        device_prot = st.selectbox("Device Protection", ["No", "Yes", "No internet service"])
-        tech_support = st.selectbox("Tech Support", ["No", "Yes", "No internet service"])
-        streaming_tv = st.selectbox("Streaming TV", ["No", "Yes", "No internet service"])
-        streaming_movies = st.selectbox("Streaming Movies", ["No", "Yes", "No internet service"])
+        device_prot = st.selectbox("Device Protection", ["No internet service", "No", "Yes"])
+        tech_support = st.selectbox("Tech Support", ["No internet service", "No", "Yes"])
+        streaming_tv = st.selectbox("Streaming TV", ["No internet service", "No", "Yes"])
+        streaming_movies = st.selectbox("Streaming Movies", ["No internet service", "No", "Yes"])
         contract = st.selectbox("Contract", ["Month-to-month", "One year", "Two year"])
-        payment = st.selectbox("Payment Method", ["Electronic check", "Credit card (automatic)", "Bank transfer (automatic)", "Mailed check"])
+        payment = st.selectbox(
+            "Payment Method",
+            [
+                "Electronic check",
+                "Credit card (automatic)",
+                "Bank transfer (automatic)",
+                "Mailed check",
+            ],
+        )
 
     submitted = st.form_submit_button("Predict")
 
@@ -114,9 +116,17 @@ with st.form("customer_form"):
 
 if submitted:
 
-    # Build full input dictionary
+    # Build model input
     values = {
         "gender": gender,
+        "SeniorCitizen": binary[senior],
+        "Partner": binary[partner],
+        "Dependents": binary[dependents],
+        "PhoneService": binary[phone],
+        "PaperlessBilling": binary[paperless],
+        "tenure": tenure,
+        "MonthlyCharges": monthly,
+        # REMOVE WRONG TotalCharges CALCULATION
         "MultipleLines": mult_lines,
         "InternetService": internet,
         "OnlineSecurity": online_security,
@@ -127,36 +137,23 @@ if submitted:
         "StreamingMovies": streaming_movies,
         "Contract": contract,
         "PaymentMethod": payment,
-        "tenure": tenure,
-        "MonthlyCharges": monthly,
-        "TotalCharges": tenure * monthly,
-        "SeniorCitizen": binary[senior],
-        "Partner": binary[partner],
-        "Dependents": binary[dependents],
-        "PhoneService": binary[phone],
-        "PaperlessBilling": binary[paperless],
     }
 
     df_raw = build_input_df(values)
     df_model = encode_and_align(df_raw, full_cols)
 
-    # Prediction
+    # Predict
     prob = model.predict_proba(df_model)[0][1]
-    pred = int(prob >= 0.30)
+    pred = int(prob >= THRESHOLD)
 
     colA, colB = st.columns([1, 2])
     with colA:
-        st.metric("Churn Probability", f"{prob*100:.2f}%")
+        st.metric("Churn Probability", f"{prob * 100:.2f}%")
         st.write("Prediction:", "🔥 **Will Churn**" if pred == 1 else "🟢 **Will Stay**")
 
-    # ---------------------------------------------------------
-    # Correct SHAP via XGBoost Booster
-    # ---------------------------------------------------------
-
+    # SHAP
     booster = model.get_booster()
     shap_vals = booster.predict(xgb.DMatrix(df_model), pred_contribs=True)
-
-    # Remove last column (XGBoost bias term)
     shap_row = shap_vals[0][:-1]
 
     st.subheader("Local SHAP Feature Impact")
